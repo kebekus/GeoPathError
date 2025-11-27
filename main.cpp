@@ -1,74 +1,48 @@
 
 #include <QGeoPath>
 
-namespace {
+#include <boost/geometry.hpp>
+#include <boost/geometry/geometries/point.hpp>
+#include <boost/geometry/geometries/segment.hpp>
 
-double deg2rad(double deg)
-{
-    return deg * M_PI / 180.0;
-}
+namespace bg = boost::geometry;
 
-double haversine(double lat1, double lon1, double lat2, double lon2)
-{
-    const double R = 6371000.0; // Earth radius (meters)
-    const double dLat = lat2 - lat1;
-    const double dLon = lon2 - lon1;
-    const double a = sin(dLat/2)*sin(dLat/2) + cos(lat1)*cos(lat2)*sin(dLon/2)*sin(dLon/2);
-    return 2 * R * atan2(sqrt(a), sqrt(1-a));
-}
-
-double bearing(double lat1, double lon1, double lat2, double lon2)
-{
-    const double y = sin(lon2-lon1) * cos(lat2);
-    const double x = cos(lat1)*sin(lat2) - sin(lat1)*cos(lat2)*cos(lon2-lon1);
-    return atan2(y, x);
-}
-
-double distancePointToSegment(const QGeoCoordinate& A, const QGeoCoordinate& B, const QGeoCoordinate& P)
-{
-    const double R = 6371000.0;
-
-    const double lat1 = deg2rad(A.latitude());
-    const double lon1 = deg2rad(A.longitude());
-    const double lat2 = deg2rad(B.latitude());
-    const double lon2 = deg2rad(B.longitude());
-    const double latP = deg2rad(P.latitude());
-    const double lonP = deg2rad(P.longitude());
-
-    const double d13 = haversine(lat1, lon1, latP, lonP) / R;
-    const double d12 = haversine(lat1, lon1, lat2, lon2) / R;
-    const double brg13 = bearing(lat1, lon1, latP, lonP);
-    const double brg12 = bearing(lat1, lon1, lat2, lon2);
-
-    const double dxt = asin(sin(d13) * sin(brg13 - brg12)); // radians
-
-    // Check if projection lies outside the segment
-    const double dat = acos( cos(d13) / cos(dxt) );  // along-track distance
-    if (dat < 0)
-        return haversine(latP, lonP, lat1, lon1); // closest to A
-    if (dat > d12)
-        return haversine(latP, lonP, lat2, lon2); // closest to B
-
-    return fabs(dxt) * R; // perpendicular distance
-}
-
-} // namespace
-
+// This example creates a QGeoPath with one line segment and width 10.000m, and a point that is les than 3.500m from the path.
+// The example verifies the distance with a computation using the boost standard library. However, Qt reports that the
+// point is not contained in the path.
 
 int main(int argc, char *argv[])
 {
     Q_UNUSED(argc)
     Q_UNUSED(argv)
 
-    const QGeoPath path1( {{50, 7}, {52, 6.999}}, 10000);
-    const QGeoPath path2( {{50, 7}, {52, 7}}, 10000);
-    const QGeoCoordinate user1 {51, 6.95};
-    const QGeoCoordinate user2 {51, 7.05};
+    const QGeoPath qt_path( {{50, 7}, {52, 6.999}}, 10000);
+    const QGeoCoordinate qt_point {51, 6.95};
 
-    qWarning() << "Is user1 near path1:" << path1.contains( user1 ) << "Distance is" << distancePointToSegment(path1.coordinateAt(0), path1.coordinateAt(1), user1) << "m";
-    qWarning() << "Is user2 near path1:" << path1.contains( user2 ) << "Distance is" << distancePointToSegment(path1.coordinateAt(0), path1.coordinateAt(1), user2) << "m";
-    qWarning() << "Is user1 near path2:" << path2.contains( user1 ) << "Distance is" << distancePointToSegment(path2.coordinateAt(0), path2.coordinateAt(1), user1) << "m";
-    qWarning() << "Is user2 near path2:" << path2.contains( user2 ) << "Distance is" << distancePointToSegment(path2.coordinateAt(0), path2.coordinateAt(1), user2) << "m";
+    // Turn qt_path and qt_point into boost types
+    using point_geo = bg::model::point<double,2, bg::cs::geographic<bg::degree>>; // Geographic (lon,lat) points in degrees
+    const point_geo A( qt_path.path()[0].longitude(), qt_path.path()[0].latitude());
+    const point_geo B( qt_path.path()[1].longitude(), qt_path.path()[1].latitude());
+    const point_geo boost_point(qt_point.longitude(), qt_point.latitude());
+    const bg::model::segment<point_geo> boost_path(A, B);
+
+    // Use boost to compute the distance from boost_point to boost_path.
+    // Using the Haversine strategy, which is an approximation with an error of 1% at most.
+    constexpr double R = 6371000.0; // Mean Earth radius
+    auto hav = bg::strategy::distance::haversine<double>(R);
+
+    try
+    {
+        // The call does everything: projection, clamping, endpoint fallback.
+        const double distance_m = bg::distance(boost_point, boost_path, hav);
+
+        qWarning() << "Distance from qt_point to qt_path = " << distance_m << "m";
+        qWarning() << "qt_path.contains( qt_point ):" << qt_path.contains( qt_point );
+    }
+    catch(...)
+    {
+        qWarning() << "Error";
+    }
 
     return 0;
 }
